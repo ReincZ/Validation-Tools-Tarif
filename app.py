@@ -47,8 +47,8 @@ if file_rs and file_sistem:
                 df_target = pd.read_excel(file_sistem, sheet_name='Multi Price')
                 
                 # --- PREPROCESSING & NORMALISASI ---
-                keys = ['Name', 'Nama Komponen', 'Kewarganegaraan', 'Unit Perawatan', 'Pembayaran', 'Kelas Perawatan']
-                cols_to_fill = ['Kewarganegaraan', 'Unit Perawatan', 'Pembayaran', 'Kelas Perawatan']
+                keys = ['Name', 'Nama Komponen', 'Kewarganegaraan', 'Tipe Kunjungan', 'Pembayaran', 'Kelas Perawatan']
+                cols_to_fill = ['Kewarganegaraan', 'Tipe Kunjungan', 'Pembayaran', 'Kelas Perawatan']
                 
                 for df in [df_source, df_target]:
                     for col in cols_to_fill:
@@ -56,7 +56,7 @@ if file_rs and file_sistem:
                             df[col] = df[col].fillna('Semua')
 
                 # --- AUDIT PENJUMLAHAN KOMPONEN (ROLL-UP) ---
-                groupby_keys = ['Name', 'Kewarganegaraan', 'Unit Perawatan', 'Pembayaran', 'Kelas Perawatan']
+                groupby_keys = ['Name', 'Kewarganegaraan', 'Tipe Kunjungan', 'Pembayaran', 'Kelas Perawatan']
                 
                 def validate_rollup(df_data, suffix):
                     rollup = df_data.groupby(groupby_keys).agg(
@@ -135,7 +135,7 @@ if file_rs and file_sistem:
 
                 # --- FORMATTING OUTPUT ---
                 df_exception['Nama Tindakan'] = df_exception['Name']
-                df_exception['Hierarki (Unit-Payer-Kelas)'] = df_exception['Unit Perawatan'].astype(str) + " - " + \
+                df_exception['Hierarki (Unit-Payer-Kelas)'] = df_exception['Tipe Kunjungan'].astype(str) + " - " + \
                                                               df_exception['Pembayaran'].astype(str) + " - " + \
                                                               df_exception['Kelas Perawatan'].astype(str)
                 
