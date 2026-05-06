@@ -25,7 +25,7 @@ MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 ALLOWED_TYPES = ['xlsx', 'xls', 'csv', 'xlsm', 'xlsb']
 
 # ==========================================
-# 1. UI UPLOAD FILE TERPISAH DENGAN FILTER EKSTENSI
+# 1. UI UPLOAD FILE TERPISAH
 # ==========================================
 col1, col2 = st.columns(2)
 
@@ -39,39 +39,31 @@ with col2:
 
 st.divider()
 
-# Fungsi Cerdas untuk Membaca Excel vs CSV
+# Fungsi Membaca File
 def load_data(uploaded_file):
-    # Mengambil nama file dan mengubahnya ke huruf kecil untuk mendeteksi ekstensi
     file_name = uploaded_file.name.lower()
-    
     if file_name.endswith('.csv'):
-        # Coba baca CSV standar (koma)
         try:
             return pd.read_csv(uploaded_file)
         except:
-            # Jika gagal, kembalikan pointer ke awal dan coba baca dengan pemisah titik koma (lazim di Excel Indonesia)
             uploaded_file.seek(0)
             return pd.read_csv(uploaded_file, sep=';')
     else:
-        # Jika itu file Excel (xls, xlsx, dst), baca sheet 'Multi Price'
         return pd.read_excel(uploaded_file, sheet_name='Multi Price')
 
 # ==========================================
 # 2. LOGIKA PROSES PANDAS
 # ==========================================
 if file_rs and file_sistem:
-    # --- VALIDASI UKURAN FILE SEBELUM DIPROSES ---
     if file_rs.size > MAX_FILE_SIZE_BYTES:
         st.error(f"❌ File **{file_rs.name}** terlalu besar! ({file_rs.size / (1024*1024):.2f} MB). Batas maksimal adalah {MAX_FILE_SIZE_MB} MB.")
     elif file_sistem.size > MAX_FILE_SIZE_BYTES:
         st.error(f"❌ File **{file_sistem.name}** terlalu besar! ({file_sistem.size / (1024*1024):.2f} MB). Batas maksimal adalah {MAX_FILE_SIZE_MB} MB.")
     else:
-        # Jika ukuran file aman, tampilkan tombol jalankan
         if st.button("🚀 Jalankan Audit Validasi Data", use_container_width=True):
             
             with st.spinner("Membaca dan memproses data... Mohon tunggu..."):
                 try:
-                    # Membaca data menggunakan fungsi pintar
                     df_source = load_data(file_rs)
                     df_target = load_data(file_sistem)
                     
@@ -80,11 +72,10 @@ if file_rs and file_sistem:
                     cols_to_fill = ['Kewarganegaraan', 'Unit Perawatan', 'Pembayaran', 'Kelas Perawatan']
                     
                     for df in [df_source, df_target]:
-                        # Pengecekan ekstra: Pastikan kolom wajib ada di dalam file yang diupload (terutama untuk CSV)
                         missing_cols = [col for col in keys if col not in df.columns]
                         if missing_cols:
                             st.error(f"File tidak valid. Kolom berikut tidak ditemukan di data Anda: {', '.join(missing_cols)}")
-                            st.stop() # Hentikan eksekusi script
+                            st.stop()
                             
                         for col in cols_to_fill:
                             if col in df.columns:
@@ -130,6 +121,45 @@ if file_rs and file_sistem:
                             if row.get('Harga Jual_RS') != row.get('Harga Jual_Sistem'):
                                 errors.append("❌ Selisih Harga Jual (Migrasi)")
 
+                        def cek_aturan_margin(suffix):
+                            ref_id = row.get(f'Reference Type ID_{suffix}')
+                            if pd.notna(ref_id) and ref_id in [1, 7]:
+                                h_beli = row.get(f'Harga Beli_{suffix}')
+                                h_jual = row.get(f'Harga Jual_{suffix}')
+                                
+                                if pd.isna(h_beli) or pd.isna(h_jual):
+                                    return None
+                                    
+                                m_persen = row.get(f'Margin Persen_{suffix}')
+                                m_total = row.get(f'Margin Total_{suffix}')
+                                calc_jual = None
+                                
+                                if pd.notna(m_persen) and str(m_persen).strip() != '':
+                                    try:
+                                        val_str = str(m_persen).strip()
+                                        if '%' in val_str:
+                                            p_val = float(val_str.replace('%', '')) / 100.0
+                                        else:
+                                            p_val = float(m_persen)
+                                            if p_val > 1: p_val = p_val / 100.0
+                                        calc_jual = h_beli + (h_beli * p_val)
+                                    except:
+                                        pass
+                                
+                                if calc_jual is None and pd.notna(m_total) and str(m_total).strip() != '':
+                                    try:
+                                        calc_jual = h_beli + float(m_total)
+                                    except:
+                                        pass
+                                        
+                                if calc_jual is not None:
+                                    calc_jual_round = round(calc_jual, 2)
+                                    h_jual_round = round(float(h_jual), 2)
+                                    
+                                    if calc_jual_round != h_jual_round:
+                                        return f"❌ ({suffix}) Ref {int(ref_id)}: Harga Jual ≠ Perhitungan Margin (Ekspektasi: {calc_jual_round})"
+                            return None
+
                         if not is_missing_rs and row.get('Reference Type ID_RS') == 4:
                             if row.get('Harga Beli_RS') != row.get('Harga Jual_RS'):
                                 errors.append("⚠️ (RS) Ref 4: Beli ≠ Jual")
@@ -138,6 +168,9 @@ if file_rs and file_sistem:
                                 errors.append("⚠️ (Sistem) Ref 4: Beli ≠ Jual")
 
                         if not is_missing_rs:
+                            err_margin_rs = cek_aturan_margin('RS')
+                            if err_margin_rs: errors.append(err_margin_rs)
+                            
                             if row.get('No_Komp_RS'):
                                 errors.append("⚠️ (RS) Tindakan tidak memiliki tarif komponen")
                             elif row.get('Rollup_Error_RS'):
@@ -147,6 +180,9 @@ if file_rs and file_sistem:
                                     errors.append("⚠️ (RS) Total Komponen ≠ Harga Jual")
 
                         if not is_missing_sistem:
+                            err_margin_sys = cek_aturan_margin('Sistem')
+                            if err_margin_sys: errors.append(err_margin_sys)
+                            
                             if row.get('No_Komp_Sistem'):
                                 errors.append("⚠️ (Sistem) Tindakan tidak memiliki tarif komponen")
                             elif row.get('Rollup_Error_Sistem'):
@@ -158,8 +194,6 @@ if file_rs and file_sistem:
                         return "\n".join(errors)
 
                     df_merge['Keterangan Error'] = df_merge.apply(check_errors, axis=1)
-
-                    # Filter khusus error
                     df_exception = df_merge[df_merge['Keterangan Error'] != ""].copy()
 
                     # --- FORMATTING OUTPUT ---
@@ -187,7 +221,7 @@ if file_rs and file_sistem:
                     ]
                     df_final = df_exception[cols_final]
 
-                    # --- PENERAPAN WARNA (STYLING) ---
+                    # --- PENERAPAN WARNA (STYLING) UTAMA ---
                     def apply_styles(row):
                         styles = [''] * len(row)
                         err_msg = str(row['Keterangan Error'])
@@ -210,6 +244,14 @@ if file_rs and file_sistem:
                             set_color('Harga Beli (Sistem)', '#ffe6cc')
                             set_color('Harga Jual (Sistem)', '#ffe6cc')
                             
+                        if "Perhitungan Margin" in err_msg:
+                            if "(RS)" in err_msg:
+                                set_color('Harga Beli (RS)', '#e6ccff')
+                                set_color('Harga Jual (RS)', '#e6ccff')
+                            if "(Sistem)" in err_msg:
+                                set_color('Harga Beli (Sistem)', '#e6ccff')
+                                set_color('Harga Jual (Sistem)', '#e6ccff')
+                            
                         if "Total Komponen ≠ Harga Jual" in err_msg or "tidak memiliki tarif komponen" in err_msg: 
                             if "(RS)" in err_msg: set_color('Harga Jual (RS)', '#e6f2ff')
                             if "(Sistem)" in err_msg: set_color('Harga Jual (Sistem)', '#e6f2ff')
@@ -220,23 +262,49 @@ if file_rs and file_sistem:
                     styled_final = styled_final.set_properties(subset=['Keterangan Error'], **{'white-space': 'pre-wrap'})
 
                     # ==========================================
-                    # 3. TAMPILAN HASIL DI HALAMAN WEB
+                    # 3. PENYUSUNAN SHEET LEGENDA WARNA
+                    # ==========================================
+                    legend_data = {
+                        "Warna": ["Merah Muda", "Kuning", "Oranye Muda", "Ungu Muda", "Biru Muda"],
+                        "Kode Hex": ["#ffcccc", "#ffff99", "#ffe6cc", "#e6ccff", "#e6f2ff"],
+                        "Penjelasan / Arti Error": [
+                            "Gagal Migrasi (Komponen Hilang di Sistem) / Orphan (Komponen Muncul Tiba-tiba di Sistem)",
+                            "Perbedaan Data Migrasi (Kode Akun Beda, Selisih Harga Beli, Selisih Harga Jual)",
+                            "Anomali Aturan Harga (Ref Type 4: Harga Beli ≠ Harga Jual)",
+                            "Kesalahan Perhitungan Margin Farmasi/Alkes (Ref Type 1 & 7: Harga Jual ≠ Perhitungan Margin)",
+                            "Kesalahan Penjumlahan (Total Harga Komponen ≠ Harga Jual) ATAU Tindakan Tidak Memiliki Komponen"
+                        ]
+                    }
+                    df_legend = pd.DataFrame(legend_data)
+
+                    # Fungsi mewarnai sheet legenda sesuai warnanya masing-masing
+                    def style_legend(row):
+                        hex_code = row['Kode Hex']
+                        return [f'background-color: {hex_code}; color: black;'] * 2 + ['']
+
+                    styled_legend = df_legend.style.apply(style_legend, axis=1)
+
+                    # ==========================================
+                    # 4. TAMPILAN WEB & MULTI-SHEET EXCEL EXPORT
                     # ==========================================
                     st.success(f"✅ Audit Selesai! Ditemukan **{len(df_final)} baris** yang memerlukan validasi atau perbaikan.")
-                    
                     st.dataframe(styled_final, height=400, use_container_width=True)
 
+                    # Menggunakan pd.ExcelWriter untuk membuat banyak sheet
                     output = io.BytesIO()
-                    styled_final.to_excel(output, index=False, engine='openpyxl')
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        styled_final.to_excel(writer, sheet_name='Hasil Audit Migrasi', index=False)
+                        styled_legend.to_excel(writer, sheet_name='Legenda Warna', index=False)
+                    
                     output.seek(0)
 
                     st.download_button(
                         label="📥 Download Laporan Audit (Excel)",
                         data=output,
-                        file_name="File_1_Validasi_Kualitas_Data_SIMRS.xlsx",
+                        file_name="Laporan_Validasi_Kualitas_Data_SIMRS.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
 
                 except Exception as e:
-                    st.error(f"Terjadi kesalahan saat memproses data. Pastikan format file dan nama *sheet*-nya sudah benar. Detail Error: {e}")
+                    st.error(f"Terjadi kesalahan saat memproses data. Pastikan format file sudah benar. Detail Error: {e}")
